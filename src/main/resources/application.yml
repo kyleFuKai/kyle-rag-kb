@@ -1,0 +1,134 @@
+spring:
+  application:
+    name: jc-rag-kb                   # 应用名，用于日志/监控标识
+
+  # ========== 数据库 ==========
+  datasource:
+    # 数据库在云服务器上，IP 走环境变量（.env 里填 DB_HOST）
+    url: jdbc:postgresql://${DB_HOST}:5432/ragkb   # ragkb 为库名
+    username: ${DB_USERNAME}          # 数据库账号（.env）
+    password: ${DB_PASSWORD}          # 数据库密码（.env）
+    driver-class-name: org.postgresql.Driver
+    hikari:                           # 连接池
+      maximum-pool-size: 20           # 最大连接数
+      minimum-idle: 5                 # 最小空闲连接
+      connection-timeout: 30000       # 获取连接超时（毫秒）
+
+  jpa:
+    hibernate:
+      ddl-auto: validate          # 生产用 validate，不自动改表结构
+    show-sql: false                   # 控制台打印 SQL，调试时改 true
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect   # PostgreSQL 方言
+        format_sql: true              # 打印 SQL 时格式化（配合 show-sql）
+
+  # ========== Redis ==========
+  data:
+    redis:
+      host: ${REDIS_HOST}             # Redis 地址（.env）
+      port: 6379                      # 端口
+      password: ${REDIS_PASSWORD}     # 密码（.env）
+      lettuce:                        # 连接池（依赖 commons-pool2）
+        pool:
+          max-active: 16              # 最大连接数
+          max-idle: 8                 # 最大空闲连接
+          min-idle: 2                 # 最小空闲连接
+
+  # ========== 业务通用线程池 ==========
+  # 由 AsyncConfig 的 taskExecutor Bean 读取（@Async 不带名字时默认用它）；
+  # 文档索引专用池是 AsyncConfig 里的 indexTaskExecutor，不在这里配
+  task:
+    execution:
+      pool:
+        core-size: 4                  # 常驻线程数
+        max-size: 8                   # 峰值线程数
+        queue-capacity: 100           # 等待队列容量，满了才扩线程
+      thread-name-prefix: "biz-task-"    # 线程名前缀，日志里好认
+
+  # ========== 文件上传限制 ==========
+  servlet:
+    multipart:
+      max-file-size: 50MB             # 单个文件上限
+      max-request-size: 100MB         # 单次请求上限（多文件合计）
+
+  # ========== Spring AI ==========
+  ai:
+    # MiniMax：大模型对话（MiniMaxChatModel，专用 starter 自带官方接口地址，不用配 base-url）
+    minimax:
+      api-key: ${MINIMAX_API_KEY}     # MiniMax 的 key（.env）
+      chat:
+        options:
+          model: MiniMax-M3.1-Flash       # 按你实际充值的模型名改
+          temperature: 0.1        # RAG 场景用低温，减少幻觉
+          max-tokens: 2048             # 单次回答最大生成 token 数
+    # 阿里百炼：向量化（走 OpenAI 兼容端点，只用它的 EmbeddingModel，聊天不用它）
+    openai:
+      base-url: https://dashscope.aliyuncs.com/compatible-mode   # 百炼的 OpenAI 兼容入口
+      api-key: ${DASHSCOPE_API_KEY}   # 百炼 key（.env），重排也用它
+      embedding:
+        options:
+          model: text-embedding-v4   # 默认 1024 维，pgvector 列要建成 vector(1024)
+
+# ========== MinIO ==========
+minio:
+  endpoint: ${MINIO_ENDPOINT}   # MinIO 地址，默认本机
+  access-key: ${MINIO_ACCESS_KEY}    # 访问键（.env）
+  secret-key: ${MINIO_SECRET_KEY}    # 密钥（.env）
+  bucket: rag-documents              # 存原始文档的桶名
+
+# ========== Reranker（阿里百炼 qwen3-rerank，自定义 HTTP 调用） ==========
+# Spring AI 没有现成的 Reranker 模块，这段是自定义配置，
+# 由 WebClient 调百炼原生 rerank 接口，key 与向量化共用 DASHSCOPE_API_KEY
+reranker:
+  endpoint: ${RERANKER_ENDPOINT}     # rerank 接口地址（.env）
+  api-key: ${RERANKER_API_KEY}       # 与 DASHSCOPE_API_KEY 同值（.env）
+  model: ${RERANKER_MODEL}           # 重排模型名（.env）
+  timeout-ms: 800       # 超时时间，超过则降级
+  top-n: 5              # 精排后保留 Top 5
+
+# ========== RAG 参数 ==========
+rag:
+  chunk:
+    size: 512           # 每块最大字符数
+    overlap: 64         # 相邻块重叠字符数
+  retrieval:
+    vector-top-k: 20    # 向量检索召回数量
+    fulltext-top-k: 20  # 全文检索召回数量
+    return-top-n: 5     # RRF 融合后最终返回的 chunk 数量
+    min-score: 0.5      # 最低相似度阈值（低于此分数的 chunk 过滤掉）
+  context:
+    max-tokens: 3000    # 传给模型的最大 context Token 数
+  cache:
+    embedding-ttl: 7d   # Embedding 缓存有效期
+    query-ttl: 10m      # 查询结果缓存有效期
+
+# ========== Sa-Token ==========
+sa-token:
+  token-name: Authorization          # Token 放在哪个请求头
+  token-prefix: Bearer               # Token 前缀，前端要带 "Bearer xxx"
+  timeout: 86400        # Token 有效期 1 天
+  is-concurrent: true               # 允许同一账号多处同时在线
+  is-share: false                   # 每次登录生成新 token，不共用
+  is-read-header: true  # 从 Header 读取 token（curl / 前端 axios 都走 Header）
+
+# ========== 监控 ==========
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, info, metrics, prometheus   # 对外暴露的运维端点
+  endpoint:
+    health:
+      show-details: always           # 健康检查显示细节（含各组件状态）
+  metrics:
+    tags:
+      application: ${spring.application.name}   # 指标统一打应用名标签，Grafana 好区分
+
+# ========== 日志 ==========
+logging:
+  level:
+    com.kyle.rag: INFO                # 业务代码日志级别
+    org.springframework.ai: WARN     # AI 框架日志降噪
+  pattern:
+    console: "%d{HH:mm:ss} [%thread] [%X{traceId}] %-5level %logger{36} - %msg%n"   # traceId 进日志，便于排查

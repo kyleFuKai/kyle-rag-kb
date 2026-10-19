@@ -1,0 +1,255 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <!-- 继承 Spring Boot 官方父工程：统一管理几百个常用依赖的版本号和插件默认配置，
+         所以下面绝大多数依赖都不用写 <version>，升级 Boot 版本只改这一处 -->
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>3.5.11</version>
+    </parent>
+
+    <groupId>com.kyle</groupId>
+    <artifactId>kyle-rag</artifactId>
+    <version>1.0-SNAPSHOT</version>
+    <name>kyle-rag-knowledge-base</name>
+
+    <properties>
+        <!-- 编译用的 Java 版本。Boot 会把它桥接成 maven.compiler.release，
+             release 一旦有值就会覆盖下面两行 source/target（当前留着无害） -->
+        <java.version>21</java.version>
+        <maven.compiler.source>21</maven.compiler.source>
+        <maven.compiler.target>21</maven.compiler.target>
+        <!-- 源码文件编码 -->
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <!-- Spring AI 版本号，供下面 BOM 引用；升级 Spring AI 只改这里 -->
+        <spring-ai.version>1.1.2</spring-ai.version>
+    </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <!-- 导入 Spring AI 的 BOM（物料清单）：只"登记"Spring AI 全家桶各模块的版本，
+                 并不实际引入任何依赖；好处是下面引 Spring AI 的 starter 不用写版本号，
+                 且各模块版本保证互相匹配 -->
+            <dependency>
+                <groupId>org.springframework.ai</groupId>
+                <artifactId>spring-ai-bom</artifactId>
+                <version>${spring-ai.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <dependencies>
+
+        <!-- ========== Web ========== -->
+        <!-- Spring MVC + 内嵌 Tomcat：对外提供 REST 接口（文件上传、问答、知识库管理） -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+
+        <!-- ========== Spring AI：MiniMax（大模型对话） ========== -->
+        <!-- MiniMax 专用 starter：自动配置 MiniMaxChatModel，用于生成回答。
+             key 配在 spring.ai.minimax.api-key。
+             注意：classpath 上还有百炼兼容模式带来的 OpenAiChatModel，
+             注入聊天模型时用 @Qualifier("miniMaxChatModel") 指定这一家 -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-starter-model-minimax</artifactId>
+        </dependency>
+
+        <!-- ========== Spring AI：阿里百炼（向量化，OpenAI 兼容模式） ========== -->
+        <!-- 用 OpenAI starter 指向百炼(DashScope)的 OpenAI 兼容端点，
+             只取它的 EmbeddingModel（Bean 名 openAiEmbeddingModel）做向量化。
+             它会顺带注册 OpenAiChatModel Bean，但本项目聊天只用 MiniMax，别注入它。
+             重排不归它管，走 yml 里 reranker.* 的自定义 HTTP 调用 -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-starter-model-openai</artifactId>
+        </dependency>
+
+        <!-- ========== 数据库（元数据 + 向量存储） ========== -->
+        <!-- JPA / Hibernate：把文档、分段、任务记录等业务数据映射成表读写 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-jpa</artifactId>
+        </dependency>
+        <!-- PostgreSQL JDBC 驱动：JPA 底层靠它连数据库 -->
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+        </dependency>
+        <!-- Hibernate 向量类型支持：让 JPA 实体能直接映射 pgvector 的 vector 列
+             （@JdbcTypeCode(SqlTypes.VECTOR)），存取 embedding。
+             前提：PostgreSQL 装了 pgvector 扩展。
+             版本用 ${hibernate.version}（Boot 父工程定义），与项目 Hibernate 自动保持一致 -->
+        <dependency>
+            <groupId>org.hibernate.orm</groupId>
+            <artifactId>hibernate-vector</artifactId>
+            <version>${hibernate.version}</version>
+        </dependency>
+
+        <!-- ========== Redis（缓存 / 会话） ========== -->
+        <!-- Redis 客户端（Lettuce）：缓存热点问答结果、共享数据等 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-redis</artifactId>
+        </dependency>
+        <!-- Lettuce 连接池的底层实现：application.yml 里配了 spring.data.redis.pool.* 才需要；
+             不用连接池可以删掉 -->
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-pool2</artifactId>
+        </dependency>
+
+        <!-- ========== MinIO（对象存储） ========== -->
+        <!-- MinIO Java SDK：用户上传的原始文件（PDF/Word/Markdown）先存对象存储，再异步解析入库 -->
+        <dependency>
+            <groupId>io.minio</groupId>
+            <artifactId>minio</artifactId>
+            <version>8.5.13</version>
+        </dependency>
+
+        <!-- ========== 文档解析（入库前提取文本） ========== -->
+        <!-- PDFBox：解析 PDF 提取文本。注意 3.x 的 API 与 2.x 不同（Loader.loadPDF） -->
+        <dependency>
+            <groupId>org.apache.pdfbox</groupId>
+            <artifactId>pdfbox</artifactId>
+            <version>3.0.3</version>
+        </dependency>
+        <!-- Apache POI：解析 Word(.docx) 提取文本 -->
+        <dependency>
+            <groupId>org.apache.poi</groupId>
+            <artifactId>poi-ooxml</artifactId>
+            <version>5.3.0</version>
+        </dependency>
+        <!-- flexmark：Markdown 解析，切分前先把 Markdown 转成纯文本。
+             flexmark-all 带全部扩展模块（60+ 个 jar）；只用基础转换的话
+             换成单独的 flexmark 依赖能瘦很多 -->
+        <dependency>
+            <groupId>com.vladsch.flexmark</groupId>
+            <artifactId>flexmark-all</artifactId>
+            <version>0.64.8</version>
+        </dependency>
+
+        <!-- ========== Token 计数 ========== -->
+        <!-- jtokkit：OpenAI 分词器（tiktoken）的 Java 实现，估算文本 token 数。
+             切分文档时用它控制每段不超过 embedding / 模型上下文的长度上限 -->
+        <dependency>
+            <groupId>com.knuddels</groupId>
+            <artifactId>jtokkit</artifactId>
+            <version>1.1.0</version>
+        </dependency>
+
+        <!-- ========== HTTP 客户端 ========== -->
+        <!-- webflux：为项目提供 WebClient（响应式 HTTP 客户端），用于调用
+             Reranker（重排序）等第三方 HTTP API。
+             与 starter-web 共存时应用仍按 MVC(Tomcat) 启动，二者不冲突 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webflux</artifactId>
+        </dependency>
+
+        <!-- ========== 登录 / 权限 ========== -->
+        <!-- Sa-Token 权限框架（Boot3 专用 starter）：登录认证、接口鉴权、注解式权限校验 -->
+        <dependency>
+            <groupId>cn.dev33</groupId>
+            <artifactId>sa-token-spring-boot3-starter</artifactId>
+            <version>1.39.0</version>
+        </dependency>
+        <!-- Sa-Token 整合 Redis（Jackson 序列化）：登录态存 Redis，服务重启不丢，
+             也为将来多实例部署共享会话做准备 -->
+        <dependency>
+            <groupId>cn.dev33</groupId>
+            <artifactId>sa-token-redis-jackson</artifactId>
+            <version>1.39.0</version>
+        </dependency>
+
+        <!-- ========== 工具库 ========== -->
+        <!-- .env 支持：把项目根目录的 .env 自动读进 Spring 环境。
+             需在启动类注册初始化器（官方 README 写法）：
+               new SpringApplicationBuilder(启动类.class)
+                   .initializers(new DotenvApplicationInitializer())
+                   .run(args);
+             协作者克隆后复制 .env.example 为 .env、填值即可运行。
+             真实环境变量优先级高于 .env，CI/生产可用环境变量覆盖 -->
+        <dependency>
+            <groupId>me.paulschwarz</groupId>
+            <artifactId>spring-dotenv</artifactId>
+            <version>5.1.0</version>
+        </dependency>
+        <!-- Lombok：@Data、@Slf4j 等注解消除样板代码；optional=true 不传递给依赖本项目的模块 -->
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <optional>true</optional>
+        </dependency>
+        <!-- Jackson JSON 序列化：web starter 已传递引入，这里显式声明
+             是因为业务代码会直接用到；版本由 Boot 管理 -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+        </dependency>
+        <!-- StringUtils 等字符串/反射/序列化工具类 -->
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-lang3</artifactId>
+        </dependency>
+
+        <!-- ========== 监控 ========== -->
+        <!-- Actuator：健康检查、运行指标等运维端点（/actuator/health） -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+        <!-- 指标输出为 Prometheus 抓取格式（/actuator/prometheus），配合 Grafana 看板 -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-registry-prometheus</artifactId>
+        </dependency>
+
+        <!-- ========== 重试 ========== -->
+        <!-- 声明式重试（@Retryable）：索引、embedding 调用等偶发失败的任务自动重试 -->
+        <dependency>
+            <groupId>org.springframework.retry</groupId>
+            <artifactId>spring-retry</artifactId>
+        </dependency>
+        <!-- AspectJ 支持：@Retryable 靠 AOP 代理生效，重试注解依赖它织入 -->
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-aspects</artifactId>
+        </dependency>
+
+        <!-- ========== 测试 ========== -->
+        <!-- JUnit 5 + Mockito + AssertJ + Spring Test 测试全家桶；scope=test 不打进正式包 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <!-- Spring Boot 打包插件：mvn package 时生成可直接 java -jar 运行的 fat jar。
+                 Lombok 只在编译期起作用，运行期不需要，从包里排除以减小体积 -->
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+                <configuration>
+                    <excludes>
+                        <exclude>
+                            <groupId>org.projectlombok</groupId>
+                            <artifactId>lombok</artifactId>
+                        </exclude>
+                    </excludes>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>
