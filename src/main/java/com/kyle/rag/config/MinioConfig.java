@@ -17,12 +17,15 @@ import org.springframework.context.annotation.Configuration;
 @Slf4j
 public class MinioConfig {
 
+    /** MinIO 服务地址，如 http://host:9100 */
     @Value("${minio.endpoint}")
     private String endpoint;
 
+    /** 访问账号（access key） */
     @Value("${minio.access-key}")
     private String accessKey;
 
+    /** 访问密钥（secret key） */
     @Value("${minio.secret-key}")
     private String secretKey;
 
