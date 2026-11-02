@@ -20,7 +20,7 @@ import java.util.regex.Pattern;
  */
 @Component
 @Slf4j
-public class MarkdownParser implements DocumentParser{
+public class MarkdownParser implements DocumentParser {
 
     // 匹配 1~3 级 ATX 标题；实际切节只认 # / ##（见 parse 里的条件），### 留在节内
     private static final Pattern HEADING_PATTERN = Pattern.compile("^#{1,3}\\s+(.+)");

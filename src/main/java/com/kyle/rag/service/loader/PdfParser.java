@@ -22,7 +22,7 @@ import java.util.regex.Pattern;
  */
 @Component
 @Slf4j
-public class PdfParser implements DocumentParser{
+public class PdfParser implements DocumentParser {
 
     // 识别章节标题行：三选一的编号前缀 + 后接正文（\s*.+ 要求编号后还有内容，光秃秃的"第三章"不算）
     //   ① 第[一二三四五六七八九十百\d]+[章节] → 第三章 / 第12节

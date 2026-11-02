@@ -2,9 +2,13 @@ package com.kyle.rag.security;
 
 import lombok.Data;
 /**
- * 当前登录用户的 ThreadLocal 上下文。
- * 登录拦截器认证通过后 set()，业务代码随处 get() 取当前用户，
- * 请求结束时必须 clear() 防止线程复用导致串号/内存泄漏。
+ * 当前登录用户的 ThreadLocal 上下文(三个独立槽位:userId / departmentId / role)。
+ * 写入方两类:HTTP 请求由登录拦截器 set、请求结束 clear;索引链路由 IndexTaskLauncher
+ * 在池线程 set 快照、finally clear。线程复用场景不清除会串号/内存泄漏。
+ *
+ * ⚠️ 各槽位带 withInitial 默认值:未初始化时返回开发期默认身份(userId=1 / admin)而非抛异常,
+ * 是认证拦截器落地前跑通全链路的脚手架——上线前必须移除默认值或改回未初始化即失败,
+ * 否则任何绕过认证的路径都会以管理员身份执行、用量记到 1 号用户。
  *
  * @author kyle
  * @version 1.0
@@ -12,49 +16,44 @@ import lombok.Data;
  */
 public class UserContext {
 
-    private static final ThreadLocal<UserInfo> CONTEXT = new ThreadLocal<>();
+    /** 未初始化默认 1L——开发期脚手架,上线前应移除(见类注释) */
+    private static final ThreadLocal<Long> USER_ID = ThreadLocal.withInitial(() -> 1L);
+    /** 未初始化默认 "default"——同上 */
+    private static final ThreadLocal<String> DEPARTMENT_ID = ThreadLocal.withInitial(() -> "default");
+    /** 默认 admin 仅限开发期;生产默认角色应是最低权限,未认证 ≠ 管理员 */
+    private static final ThreadLocal<String> ROLE = ThreadLocal.withInitial(() -> "admin");
 
-    /** 拦截器 preHandle 里调用 */
-    public static void set(UserInfo user) {
-        CONTEXT.set(user);
-    }
-
-    /** 未登录（未初始化）时直接抛异常，强制调用方先过认证 */
-    public static UserInfo get() {
-        UserInfo user = CONTEXT.get();
-        if (user == null) {
-            throw new IllegalStateException("UserContext 未初始化，请检查认证拦截器配置");
-        }
-        return user;
-    }
-
+    /** 未 set 时返回默认 1L(开发期),不抛异常 */
     public static Long getUserId() {
-        return get().getUserId();
+        return USER_ID.get();
     }
 
+    /** 未 set 时返回 "default" */
     public static String getDepartmentId() {
-        return get().getDepartmentId();
+        return DEPARTMENT_ID.get();
     }
 
+    /** 未 set 时返回 "admin"(开发期默认) */
+    public static String getRole() {
+        return ROLE.get();
+    }
+
+    /** 忽略大小写比较,兼容 "ADMIN"/"admin" 两种存法 */
     public static boolean isAdmin() {
-        return "ADMIN".equals(get().getRole());
+        return "ADMIN".equalsIgnoreCase(ROLE.get());
     }
 
-    /** 拦截器 afterCompletion 里调用（Tomcat 线程会复用，不清会串号） */
+    /** 三个槽位一次性 set,保证快照一致;调用方负责在同一线程的任务结束时 clear */
+    public static void set(Long userId, String departmentId, String role) {
+        USER_ID.set(userId);
+        DEPARTMENT_ID.set(departmentId);
+        ROLE.set(role);
+    }
+
+    /** 三个槽位必须全部 remove,漏掉任何一个都会把身份串给该线程的下一个任务 */
     public static void clear() {
-        CONTEXT.remove();
-    }
-
-    /** 当前用户信息载体 */
-    @Data
-    public static class UserInfo {
-        /** 用户主键，关联 users 表 */
-        private Long userId;
-        /** 登录名，日志与展示用 */
-        private String username;
-        /** 所属部门，知识库按部门隔离时做数据过滤 */
-        private String departmentId;
-        /** 角色：ADMIN（管理员）/ MEMBER（普通成员） */
-        private String role;
+        USER_ID.remove();
+        DEPARTMENT_ID.remove();
+        ROLE.remove();
     }
 }

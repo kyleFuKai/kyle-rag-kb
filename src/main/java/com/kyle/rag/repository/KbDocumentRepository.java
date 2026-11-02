@@ -13,7 +13,7 @@ import java.util.List;
  * @version 1.0
  * @date 2026/10/27 10:55
  */
-public interface KbDocumentRepository extends JpaRepository<KbDocument, Long>{
+public interface KbDocumentRepository extends JpaRepository<KbDocument, Long> {
 
     /** 按知识库 ID 查询未删除的文档，返回结果未指定排序。 */
     List<KbDocument> findByKbId(Long kbId);

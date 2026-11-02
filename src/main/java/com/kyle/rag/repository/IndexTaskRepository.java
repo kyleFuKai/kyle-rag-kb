@@ -11,7 +11,7 @@ import java.util.Optional;
  * @version 1.0
  * @date 2026/10/27 11:13
  */
-public interface IndexTaskRepository extends JpaRepository<IndexTask, Long>{
+public interface IndexTaskRepository extends JpaRepository<IndexTask, Long> {
 
     /**
      * 查询指定文档创建时间最新的一条任务，不限制任务状态。

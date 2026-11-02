@@ -17,7 +17,7 @@ import java.util.List;
  */
 @Component
 @Slf4j
-public class TxtParser  implements DocumentParser {
+public class TxtParser implements DocumentParser {
 
     /** UTF-8 解码后若替换字符（U+FFFD）占比超过阈值，则视为疑似非 UTF-8，尝试 GBK */
     private static final double UTF8_DECODE_FAIL_THRESHOLD = 0.01;

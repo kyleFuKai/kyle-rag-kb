@@ -19,7 +19,7 @@ import java.util.List;
  */
 @Component
 @Slf4j
-public class DocxParser implements DocumentParser{
+public class DocxParser implements DocumentParser {
 
     @Override
     public String supportedType() {
