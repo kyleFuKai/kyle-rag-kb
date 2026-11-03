@@ -1,5 +1,7 @@
 package com.kyle.rag.dto;
 
+import lombok.Data;
+
 /**
  * 文档索引状态查询的响应体,供上传后的轮询(与 DocumentUploadResponse 配套)。
  * status 取值同 KbDocument.DocumentStatus:索引任务完成前 chunkCount 等统计字段为初始值。
@@ -8,6 +10,7 @@ package com.kyle.rag.dto;
  * @version 1.0
  * @date 2026/11/2 15:20
  */
+@Data
 public class IndexStatusResponse {
 
     /** 文档 ID */

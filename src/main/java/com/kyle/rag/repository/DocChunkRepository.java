@@ -93,4 +93,25 @@ public interface DocChunkRepository extends JpaRepository<DocChunk, Long> {
     /** 按 ID 列表批量查询（引用溯源时使用） */
     @Query("SELECT c FROM DocChunk c WHERE c.id IN :ids")
     List<DocChunk> findByIds(@Param("ids") List<Long> ids);
+
+    /**
+     * 统计指定文档、指定版本的分块数；version 由调用方传入，不会自动读取文档当前版本。
+     * 此查询不检查父文档的软删除状态。
+     */
+    @Query("SELECT COUNT(c) FROM DocChunk c WHERE c.docId = :docId AND c.docVersion = :version")
+    long countByDocIdAndDocVersion(@Param("docId") Long docId, @Param("version") Integer version);
+
+    /**
+     * 统计知识库下所有版本的分块总数，不过滤父文档的软删除状态。
+     * 重建期间或旧版本尚未清理时，会包含新旧版本，不等同于当前可检索的分块数。
+     */
+    @Query("SELECT COUNT(c) FROM DocChunk c WHERE c.kbId = :kbId")
+    long countByKbId(@Param("kbId") Long kbId);
+
+    /**
+     * 查询知识库下所有分块，供评估数据集标注等场景使用。
+     * 不过滤版本或父文档软删除状态，标注前需确认数据范围，避免选入旧版本或已删文档的残留分块。
+     * 一次加载全部实体（包含向量），未分页且未指定排序；数据量较大时需留意内存占用。
+     */
+    List<DocChunk> findByKbId(@Param("kbId") Long kbId);
 }
