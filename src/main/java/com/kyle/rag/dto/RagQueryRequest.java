@@ -17,6 +17,6 @@ public class RagQueryRequest {
     /** 用户问题,原样作为 prompt 的 user 消息 */
     private String question;
 
-    /** 要检索的知识库 ID 列表(可跨库);⚠️ 权限校验待接入 */
+    /** 要检索的知识库 ID 列表(可跨库) */
     private List<Long> kbIds;
 }
