@@ -8,7 +8,7 @@ import lombok.NoArgsConstructor;
 import java.util.List;
 /**
  * RAG 问答的结构化响应:答案 + 引用来源 + 耗时。
- * sources 按相关性顺序排列,前端可用于"查看引用原文"交互;
+ * sources 按回答中引用出现的顺序排列(模型未标注引用时为全部候选),前端可用于"查看引用原文"交互;
  * notFound=true 表示检索/置信度过滤后无有效内容,answer 为引导话术,此时 sources 为空。
  *
  * @author kyle
@@ -43,6 +43,9 @@ public class RagResponse {
         private Long chunkId;
         /** 所属文档 ID,前端跳转文档用 */
         private Long docId;
+
+        /** 文档文件名,展示用 */
+        private String docName;
         /** 页码/节序号(语义随 fileType,PDF=物理页) */
         private Integer pageNum;
         /** 章节标题 */

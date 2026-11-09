@@ -93,7 +93,7 @@ public class RerankerService {
             int topN) {
 
         // 构建请求体(DashScope rerank 嵌套格式:model + input{query,documents} + parameters,qwen3-rerank 同构)
-        // ⚠️ 代码默认值是已下线的 gte-rerank,正常路径永远读 .env 的 RERANKER_MODEL=qwen3-rerank
+        // 请求体使用 reranker.model 配置(.env 中 RERANKER_MODEL=qwen3-rerank)
         List<String> docs = candidates.stream()
                 .map(HybridRetrieverService.ScoredChunk::content)
                 .collect(Collectors.toList());

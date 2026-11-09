@@ -48,7 +48,7 @@ public class EnhancedRetrieverService {
 
         // 路线1：原始问题的混合检索结果
         List<HybridRetrieverService.ScoredChunk> originalResults =
-                hybridRetriever.retrieve(question, kbIds, vectorTopK);
+                hybridRetriever.retrieveWithPermissionCheck(question, kbIds, vectorTopK);
 
         // 路线2：HyDE 假设答案的向量检索结果
         String hydeAnswer = queryRewriter.generateHypotheticalAnswer(question);

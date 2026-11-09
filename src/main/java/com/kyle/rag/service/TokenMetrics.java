@@ -27,7 +27,6 @@ import org.springframework.stereotype.Component;
  * @version 1.0
  * @date 2026/10/25 15:31
  */
-
 @Component
 @RequiredArgsConstructor
 @Slf4j

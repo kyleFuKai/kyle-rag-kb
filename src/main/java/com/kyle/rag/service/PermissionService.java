@@ -1,6 +1,7 @@
 package com.kyle.rag.service;
 
 import com.kyle.rag.entity.KnowledgeBase;
+import com.kyle.rag.exception.BizException;
 import com.kyle.rag.repository.KbPermissionRepository;
 import com.kyle.rag.repository.KnowledgeBaseRepository;
 import com.kyle.rag.security.UserContext;
@@ -48,7 +49,7 @@ public class PermissionService {
                 kbId, "DEPARTMENT", deptId);
 
         if (!hasPermission) {
-            throw new RuntimeException("无权访问该知识库");
+            throw BizException.forbidden("无权访问该知识库");
         }
     }
 
@@ -67,7 +68,7 @@ public class PermissionService {
                         kbId, "DEPARTMENT", deptId, WRITE_LEVELS);
 
         if (!hasWritePermission) {
-            throw new RuntimeException("无文档管理权限");
+            throw BizException.forbidden("无文档管理权限");
         }
     }
 }

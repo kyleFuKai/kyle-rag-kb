@@ -33,7 +33,7 @@ public class RagQueryServiceV2 {
     public String query(String question, List<Long> kbIds) {
         // Step 1：混合检索
         List<HybridRetrieverService.ScoredChunk> scoredChunks =
-                hybridRetriever.retrieve(question, kbIds, returnTopN);
+                hybridRetriever.retrieveWithPermissionCheck(question, kbIds, returnTopN);
 
         if (scoredChunks.isEmpty()) {
             return buildNotFoundResponse();

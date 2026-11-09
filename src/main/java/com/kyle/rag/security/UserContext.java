@@ -6,9 +6,8 @@ import lombok.Data;
  * 写入方两类:HTTP 请求由登录拦截器 set、请求结束 clear;索引链路由 IndexTaskLauncher
  * 在池线程 set 快照、finally clear。线程复用场景不清除会串号/内存泄漏。
  *
- * ⚠️ 各槽位带 withInitial 默认值:未初始化时返回开发期默认身份(userId=1 / admin)而非抛异常,
- * 是认证拦截器落地前跑通全链路的脚手架——上线前必须移除默认值或改回未初始化即失败,
- * 否则任何绕过认证的路径都会以管理员身份执行、用量记到 1 号用户。
+ * 各槽位带 withInitial 默认值:未初始化时返回默认身份(userId=1 / department=default / role=admin),
+ * 不抛异常;clear() 后再次 get() 也会重新初始化为默认值。
  *
  * @author kyle
  * @version 1.0

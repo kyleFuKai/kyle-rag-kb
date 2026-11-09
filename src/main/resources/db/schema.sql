@@ -155,7 +155,7 @@ CREATE INDEX idx_session_user ON kb_chat_session(user_id, last_active_at DESC)
 -- ================================================================
 CREATE TABLE kb_chat_message (
                                  id              BIGSERIAL PRIMARY KEY,
-                                 session_id      VARCHAR(36)     NOT NULL,
+                                 session_id      VARCHAR(64)     NOT NULL,           -- 64:兼容 eval- 前缀等带命名空间的会话 ID
                                  role            VARCHAR(20)     NOT NULL,           -- USER / ASSISTANT
                                  content         TEXT            NOT NULL,
                                  sources         JSONB,                             -- 引用来源列表（仅 ASSISTANT 消息有）

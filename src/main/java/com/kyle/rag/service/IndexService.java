@@ -195,7 +195,7 @@ public class IndexService {
             //   先 save 让"读 doc.version 的并发查询"能看到新版本，
             //   但旧版本 chunk 还在，查询时 ORDER BY docVersion DESC 取最新即可。
             //
-            //   ⚠️ 这里 save 之前必须显式 setStatus(PROCESSING)——doc 参数对象是更早 findById 拿的，
+            //   这里 save 之前必须显式 setStatus(PROCESSING)——doc 参数对象是更早 findById 拿的，
             //     内存里的 status 还是 PENDING；而 updateDocStatus 是用另一个对象 save 的。
             //     如果不显式 set，这次 save 会把 doc.status=PENDING 写回 DB，覆盖掉 PROCESSING。
             int newVersion = (doc.getVersion() == null ? 1 : doc.getVersion() + 1);

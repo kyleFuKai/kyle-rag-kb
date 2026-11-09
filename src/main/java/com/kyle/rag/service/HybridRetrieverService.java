@@ -1,7 +1,11 @@
 package com.kyle.rag.service;
 
 import com.kyle.rag.entity.DocChunk;
+import com.kyle.rag.exception.BizException;
 import com.kyle.rag.repository.DocChunkRepository;
+import com.kyle.rag.repository.KbPermissionRepository;
+import com.kyle.rag.repository.KnowledgeBaseRepository;
+import com.kyle.rag.security.UserContext;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -19,7 +23,8 @@ import java.util.stream.Collectors;
  * 已知局限:全文路对中文整句查询命中率低(索引与查询两侧都是 simple 分词,
  * 长句切成单个长 token 几乎不可能精确匹配),向量路始终兜底;
  * 查询侧接 jieba 时索引侧需同步改造,否则两侧分词口径不一致。
- * 结果不含权限过滤,调用方需保证 kbIds 已过 requireRead。
+ * 权限:retrieveWithPermissionCheck(requestedKbIds) 过滤无权库后检索(部分授权时继续答有权部分);
+ * retrieve 为无鉴权入口,仅供已受信的内部调用(如权限过滤后的复检)使用。
  *
  * @author kyle
  * @version 1.0
@@ -33,6 +38,8 @@ public class HybridRetrieverService {
     private final EmbeddingService embeddingService;
     private final DocChunkRepository chunkRepository;
     private final TsQueryBuilder tsQueryBuilder;
+    private final KnowledgeBaseRepository kbRepository;
+    private final KbPermissionRepository permissionRepository;
 
     @Value("${rag.retrieval.vector-top-k:20}")
     private int vectorTopK;
@@ -85,6 +92,51 @@ public class HybridRetrieverService {
     }
 
     /**
+     * 权限安全的混合检索——在调用前过滤 kbIds。
+     * 用户传入 kbIds，只有实际有权限的才会被检索。
+     */
+    public List<ScoredChunk> retrieveWithPermissionCheck(
+            String question, List<Long> requestedKbIds, int topN) {
+
+        List<Long> allowedKbIds = filterAllowedKbIds(requestedKbIds);
+
+        if (allowedKbIds.isEmpty()) {
+            throw BizException.forbidden("您对所请求的知识库没有访问权限");
+        }
+
+        if (allowedKbIds.size() < requestedKbIds.size()) {
+            List<Long> denied = requestedKbIds.stream()
+                    .filter(id -> !allowedKbIds.contains(id))
+                    .toList();
+            log.warn("[权限过滤] userId={} 无权访问 kbIds={}，已过滤",
+                    UserContext.getUserId(), denied);
+        }
+
+        return retrieve(question, allowedKbIds, topN);
+    }
+
+    private List<Long> filterAllowedKbIds(List<Long> kbIds) {
+        if (UserContext.isAdmin()) return kbIds;
+
+        String userId = String.valueOf(UserContext.getUserId());
+        String deptId = UserContext.getDepartmentId();
+
+        return kbIds.stream()
+                .filter(kbId -> {
+                    boolean isPublic = kbRepository.findById(kbId)
+                            .map(kb -> kb.getIsPublic())
+                            .orElse(false);
+                    if (isPublic) return true;
+
+                    return permissionRepository.existsByKbIdAndSubjectTypeAndSubjectId(
+                            kbId, "USER", userId)
+                            || permissionRepository.existsByKbIdAndSubjectTypeAndSubjectId(
+                            kbId, "DEPARTMENT", deptId);
+                })
+                .toList();
+    }
+
+    /**
      * RRF 融合两路结果。
      * 去重：同一个 chunk 出现在两路结果中时，分数累加。
      */
@@ -116,7 +168,7 @@ public class HybridRetrieverService {
                 .collect(Collectors.toList());
     }
 
-    /** float[] → pgvector 文本格式 [0.1,0.2,...];与 RagQueryService 中同名方法重复,后续可抽公共工具 */
+    /** float[] → pgvector 文本格式 [0.1,0.2,...] */
     private String toVectorString(float[] embedding) {
         StringBuilder sb = new StringBuilder("[");
         for (int i = 0; i < embedding.length; i++) {
