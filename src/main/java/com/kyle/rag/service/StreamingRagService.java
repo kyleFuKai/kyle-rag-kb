@@ -41,6 +41,7 @@ public class StreamingRagService {
     private final ChatClient chatClient;
     private final ObjectMapper objectMapper;
     private final TokenMetrics tokenMetrics;
+    private final QueryCacheService queryCacheService;
 
     /**
      * 流式 RAG 查询:按 SSE 协议推送,生成完毕后整轮落库并推 done 事件。
@@ -50,12 +51,28 @@ public class StreamingRagService {
         long start = System.currentTimeMillis();
 
         try {
-            // Step 1：推送"检索中"状态
+            // 多轮追问（有历史）不走缓存；仅首轮可缓存
+            List<Message> history = loadHistoryMessages(sessionId);
+            boolean cacheable = history.isEmpty();
+
+            // 首轮才查缓存——命中则直接把完整答案一次性推给前端，跳过检索和生成
+            RagResponse cached = cacheable ? queryCacheService.getFromCache(question, kbIds) : null;
+            if (cached != null) {
+                emitter.send(SseEmitter.event().name("token").data(cached.getAnswer()));
+                String doneData = objectMapper.writeValueAsString(
+                        new DonePayload(cached.getSources(), 0));
+                emitter.send(SseEmitter.event().name("done").data(doneData));
+                emitter.complete();
+                sessionService.saveMessage(sessionId, question, cached.getAnswer(),
+                        sourceBuilder.sourcesToJson(cached.getSources()), 0);
+                return;
+            }
+
+            // 缓存未命中，走完整流式管道
             emitter.send(SseEmitter.event()
                     .name("status")
                     .data("{\"type\":\"RETRIEVING\",\"message\":\"正在检索知识库...\"}"));
 
-            // Step 2：执行检索管道
             var candidates = enhancedRetriever.retrieveWithHyde(question, kbIds, 20);
             var reranked = rerankerService.rerank(question, candidates, 5);
             var filtered = confidenceFilter.filter(reranked);
@@ -67,60 +84,58 @@ public class StreamingRagService {
 
             var trimmed = contextTrimmer.trim(filtered);
 
-            // Step 3：推送"生成中"状态
             emitter.send(SseEmitter.event()
                     .name("status")
                     .data("{\"type\":\"GENERATING\",\"message\":\"已找到相关内容，正在生成回答...\"}"));
 
-            // Step 4：构建 Prompt（含多轮历史）
             String context = buildContext(trimmed);
             String systemPrompt = RagPromptTemplate.buildSystemPrompt(context, trimmed.size());
-            List<Message> history = loadHistoryMessages(sessionId);   // 取近 N 轮历史做上下文
 
-            // Step 5：流式生成，逐 Token 推送
             StringBuilder fullAnswer = new StringBuilder();
 
             chatClient.prompt()
                     .system(systemPrompt)
-                    .messages(history)          // 把历史注入，模型才"记得"上文，多轮追问才成立
+                    .messages(history)
                     .user(question)
                     .stream()
                     .content()
                     .doOnNext(token -> {
                         try {
                             fullAnswer.append(token);
-                            emitter.send(SseEmitter.event()
-                                    .name("token")
-                                    .data(token));
+                            emitter.send(SseEmitter.event().name("token").data(token));
                         } catch (IOException e) {
                             log.warn("[StreamRAG] SSE 推送 Token 失败，客户端可能已断开");
                             throw new RuntimeException("SSE 连接断开");
                         }
                     })
-                    .blockLast();  // 等待生成完成
+                    .blockLast();
 
-            // Step 6：保存对话记录 + 记录 Generation Token
             String answer = fullAnswer.toString();
-            int genTokens = contextTrimmer.countTokens(answer);
-            tokenMetrics.recordGenerationTokens(genTokens);
+            tokenMetrics.recordGenerationTokens(contextTrimmer.countTokens(answer));
 
             List<RagResponse.Source> sources = sourceBuilder.buildSources(answer, trimmed);
             String sourcesJson = sourceBuilder.sourcesToJson(sources);
-            sessionService.saveMessage(sessionId, question, answer, sourcesJson,
-                    (int) (System.currentTimeMillis() - start));
+            int latencyMs = (int) (System.currentTimeMillis() - start);
 
-            // Step 7：推送来源信息（done 事件）
-            String doneData = objectMapper.writeValueAsString(
-                    new DonePayload(sources, (int) (System.currentTimeMillis() - start)));
+            sessionService.saveMessage(sessionId, question, answer, sourcesJson, latencyMs);
+
+            // 只有首轮（无历史）才写缓存
+            if (cacheable) {
+                RagResponse response = RagResponse.builder()
+                        .answer(answer).sources(sources).latencyMs(latencyMs).build();
+                queryCacheService.putToCache(question, kbIds, response);
+            }
+
+            String doneData = objectMapper.writeValueAsString(new DonePayload(sources, latencyMs));
             emitter.send(SseEmitter.event().name("done").data(doneData));
             emitter.complete();
 
         } catch (Exception e) {
-            log.error("[StreamRAG] 流式生成失败：{}", e.getMessage(), e);
+            log.error("[StreamRAG] 流式查询异常：{}", e.getMessage(), e);
             try {
-                // 用 ObjectMapper 拼 JSON，避免异常信息里的引号/换行把 data 打成非法 JSON
+                // 与流式那节统一：用 objectMapper 生成，避免手拼 JSON 出错
                 String errData = objectMapper.writeValueAsString(
-                        Map.of("message", "生成失败：" + e.getMessage()));
+                        Map.of("message", "生成过程中出现异常"));
                 emitter.send(SseEmitter.event().name("error").data(errData));
                 emitter.complete();
             } catch (IOException ignored) {}
@@ -131,6 +146,19 @@ public class StreamingRagService {
      * 同步版本(供测试/对照),流程与流式一致但一次性返回 RagResponse。
      */
     public RagResponse syncQuery(String question, List<Long> kbIds, String sessionId) {
+        // 多轮追问（有历史）时同一句问题在不同上下文答案不同，不能走缓存；仅首轮可缓存
+        List<Message> history = loadHistoryMessages(sessionId);
+        boolean cacheable = history.isEmpty();
+
+        // 先查缓存（仅首轮）
+        RagResponse cached = cacheable ? queryCacheService.getFromCache(question, kbIds) : null;
+        if (cached != null) {
+            sessionService.saveMessage(sessionId, question, cached.getAnswer(),
+                    sourceBuilder.sourcesToJson(cached.getSources()), 0);
+            return cached;
+        }
+
+        // 缓存未命中，走完整 RAG 管道
         long start = System.currentTimeMillis();
 
         var candidates = enhancedRetriever.retrieveWithHyde(question, kbIds, 20);
@@ -142,7 +170,6 @@ public class StreamingRagService {
         var trimmed = contextTrimmer.trim(filtered);
         String context = buildContext(trimmed);
         String systemPrompt = RagPromptTemplate.buildSystemPrompt(context, trimmed.size());
-        List<Message> history = loadHistoryMessages(sessionId);
 
         String answer = chatClient.prompt()
                 .system(systemPrompt)
@@ -151,8 +178,7 @@ public class StreamingRagService {
                 .call()
                 .content();
 
-        int genTokens = contextTrimmer.countTokens(answer);
-        tokenMetrics.recordGenerationTokens(genTokens);
+        tokenMetrics.recordGenerationTokens(contextTrimmer.countTokens(answer));
 
         List<RagResponse.Source> sources = sourceBuilder.buildSources(answer, trimmed);
         String sourcesJson = sourceBuilder.sourcesToJson(sources);
@@ -160,11 +186,17 @@ public class StreamingRagService {
 
         sessionService.saveMessage(sessionId, question, answer, sourcesJson, latencyMs);
 
-        return RagResponse.builder()
+        RagResponse response = RagResponse.builder()
                 .answer(answer)
                 .sources(sources)
                 .latencyMs(latencyMs)
                 .build();
+
+        // 只有首轮（无历史）才写缓存
+        if (cacheable) {
+            queryCacheService.putToCache(question, kbIds, response);
+        }
+        return response;
     }
 
     /** 会话历史转 Spring AI 消息列表(USER/ASSISTANT 按角色还原),喂给模型做多轮上下文 */
@@ -187,6 +219,8 @@ public class StreamingRagService {
         }
         return sb.toString().strip();
     }
+
+
 
     /** 空结果短路:推一段话术 + 空 done 事件,不调模型 */
     private void sendNotFound(SseEmitter emitter) throws IOException {
