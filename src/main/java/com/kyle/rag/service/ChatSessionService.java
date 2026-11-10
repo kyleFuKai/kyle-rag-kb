@@ -1,6 +1,7 @@
 package com.kyle.rag.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.kyle.rag.exception.BizException;
 import com.kyle.rag.entity.ChatMessage;
 import com.kyle.rag.entity.ChatSession;
 import com.kyle.rag.repository.ChatMessageRepository;
@@ -12,6 +13,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import com.kyle.rag.common.AuthConstants;
 import java.util.List;
 import java.util.UUID;
 /**
@@ -42,10 +44,13 @@ public class ChatSessionService {
     @Transactional
     public String getOrCreateSession(String sessionId, List<Long> kbIds) {
         if (sessionId != null && !sessionId.isBlank()) {
-            sessionRepository.findById(sessionId).ifPresent(s -> {
-                s.setLastActiveAt(LocalDateTime.now());
-                sessionRepository.save(s);
-            });
+            ChatSession session = sessionRepository.findById(sessionId)
+                    .orElseThrow(() -> BizException.notFound("会话不存在：" + sessionId));
+            if (!session.getUserId().equals(UserContext.getUserId())) {
+                throw BizException.forbidden("无权访问该会话");
+            }
+            session.setLastActiveAt(LocalDateTime.now());
+            sessionRepository.save(session);
             return sessionId;
         }
 
@@ -71,14 +76,14 @@ public class ChatSessionService {
         // 保存用户消息
         ChatMessage userMsg = new ChatMessage();
         userMsg.setSessionId(sessionId);
-        userMsg.setRole("USER");
+        userMsg.setRole(AuthConstants.CHAT_ROLE_USER);
         userMsg.setContent(question);
         messageRepository.save(userMsg);
 
         // 保存助手回答
         ChatMessage assistantMsg = new ChatMessage();
         assistantMsg.setSessionId(sessionId);
-        assistantMsg.setRole("ASSISTANT");
+        assistantMsg.setRole(AuthConstants.CHAT_ROLE_ASSISTANT);
         assistantMsg.setContent(answer);
         assistantMsg.setSources(sourcesJson);
         assistantMsg.setLatencyMs(latencyMs);

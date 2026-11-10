@@ -6,6 +6,7 @@ import cn.dev33.satoken.router.SaRouter;
 import cn.dev33.satoken.stp.StpUtil;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Bean;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpStatus;
 /**
@@ -35,5 +36,11 @@ public class SecurityConfig {
                     SaHolder.getResponse().setStatus(HttpStatus.UNAUTHORIZED.value());
                     return "{\"code\":401,\"message\":\"请先登录\"}";
                 });
+    }
+
+    /** BCrypt 密码编码器:登录校验与密码哈希 */
+    @Bean
+    public PasswordEncoder passwordEncoder() {
+        return new org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder();
     }
 }

@@ -134,6 +134,18 @@ CREATE INDEX idx_task_status ON kb_index_task(status, created_at);
 CREATE INDEX idx_task_doc_id ON kb_index_task(doc_id);
 
 -- ================================================================
+-- 0. 用户表(演示版:生产应对接企业 SSO/LDAP)
+-- ================================================================
+CREATE TABLE IF NOT EXISTS users (
+                                id              BIGSERIAL PRIMARY KEY,
+                                username        VARCHAR(50)     NOT NULL UNIQUE,
+                                password_hash   VARCHAR(100)    NOT NULL,           -- BCrypt
+                                department_id   VARCHAR(50)     NOT NULL,
+                                role            VARCHAR(20)     NOT NULL,           -- ADMIN / MEMBER
+                                created_at      TIMESTAMP       NOT NULL DEFAULT NOW()
+);
+
+-- ================================================================
 -- 6. 对话会话表
 -- ================================================================
 CREATE TABLE kb_chat_session (

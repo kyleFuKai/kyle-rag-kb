@@ -52,6 +52,10 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>
         </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-validation</artifactId>
+        </dependency>
 
         <!-- ========== Spring AI：MiniMax（大模型对话） ========== -->
         <!-- MiniMax 专用 starter：自动配置 MiniMaxChatModel，用于生成回答。
@@ -161,6 +165,10 @@
             <groupId>cn.dev33</groupId>
             <artifactId>sa-token-spring-boot3-starter</artifactId>
             <version>1.39.0</version>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-crypto</artifactId>
         </dependency>
         <!-- Sa-Token 整合 Redis（Jackson 序列化）：登录态存 Redis，服务重启不丢，
              也为将来多实例部署共享会话做准备 -->

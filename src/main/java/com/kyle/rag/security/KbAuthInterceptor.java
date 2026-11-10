@@ -1,6 +1,7 @@
 package com.kyle.rag.security;
 
 import cn.dev33.satoken.stp.StpUtil;
+import com.kyle.rag.common.AuthConstants;
 import com.kyle.rag.repository.KbPermissionRepository;
 import com.kyle.rag.repository.KnowledgeBaseRepository;
 import jakarta.servlet.http.HttpServletRequest;
@@ -45,7 +46,7 @@ public class KbAuthInterceptor implements HandlerInterceptor {
         Object roleObj = StpUtil.getSession().get("role");
 
         String deptId = deptObj != null ? deptObj.toString() : "";
-        String role = roleObj != null ? roleObj.toString() : "MEMBER";
+        String role = roleObj != null ? roleObj.toString() : AuthConstants.ROLE_MEMBER;
 
         UserContext.set(Long.parseLong(userId), deptId, role);
         return true;

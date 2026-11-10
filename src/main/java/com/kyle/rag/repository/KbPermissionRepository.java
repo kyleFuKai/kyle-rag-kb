@@ -2,6 +2,8 @@ package com.kyle.rag.repository;
 
 import com.kyle.rag.entity.KbPermission;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
@@ -25,6 +27,16 @@ public interface KbPermissionRepository extends JpaRepository<KbPermission, Long
     /** 主体对该知识库是否持有给定级别之一——校验"至少 WRITE"时传 [WRITE, ADMIN] */
     boolean existsByKbIdAndSubjectTypeAndSubjectIdAndPermissionIn(
             Long kbId, String subjectType, String subjectId, List<String> permissions);
+
+    /**
+     * 批量查:指定知识库集合中,某主体(用户或部门)的全部授权。
+     * 权限过滤时一次取回再内存判定,避免每个库查一次(N+1)。
+     */
+    @Query("SELECT p FROM KbPermission p WHERE p.kbId IN :kbIds " +
+            "AND p.subjectType = :subjectType AND p.subjectId = :subjectId")
+    List<KbPermission> findForSubjects(@Param("kbIds") List<Long> kbIds,
+                                      @Param("subjectType") String subjectType,
+                                      @Param("subjectId") String subjectId);
 
     /** 知识库的全部授权记录——授权管理页用 */
     List<KbPermission> findByKbId(Long kbId);

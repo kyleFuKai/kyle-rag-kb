@@ -1,6 +1,8 @@
 package com.kyle.rag.controller;
 
 import com.kyle.rag.dto.*;
+import com.kyle.rag.exception.BizException;
+import jakarta.validation.Valid;
 import com.kyle.rag.entity.*;
 import com.kyle.rag.repository.*;
 import com.kyle.rag.security.UserContext;
@@ -32,6 +34,7 @@ public class KnowledgeBaseController {
 
     private final PermissionService permissionService;
     private final KnowledgeBaseService kbService;
+    private final DocumentUpdateService documentUpdateService;
     private final KbDocumentRepository documentRepository;
     private final IndexTaskRepository taskRepository;
     private final MinioStorageService minioService;
@@ -44,7 +47,7 @@ public class KnowledgeBaseController {
 
     /** 创建知识库;创建者在 service 内自动获得该库的 ADMIN 授权 */
     @PostMapping
-    public ApiResponse<KnowledgeBase> create(@RequestBody KnowledgeBaseCreateRequest req) {
+    public ApiResponse<KnowledgeBase> create(@Valid @RequestBody KnowledgeBaseCreateRequest req) {
         return ApiResponse.ok(kbService.create(req));
     }
 
@@ -66,7 +69,7 @@ public class KnowledgeBaseController {
         permissionService.requireRead(kbId);
 
         KbDocument doc = documentRepository.findById(docId)
-                .orElseThrow(() -> new RuntimeException("文档不存在"));
+                .orElseThrow(() -> BizException.notFound("文档不存在"));
 
         // 查最新的索引任务（可能有重试）
         IndexTask latestTask = taskRepository
@@ -110,7 +113,7 @@ public class KnowledgeBaseController {
             @PathVariable Long docId) {
         permissionService.requireRead(kbId);
         KbDocument doc = documentRepository.findById(docId)
-                .orElseThrow(() -> new RuntimeException("文档不存在"));
+                .orElseThrow(() -> BizException.notFound("文档不存在"));
         byte[] content = minioService.download(doc.getMinioPath());
         String encodedName = URLEncoder.encode(doc.getFileName(), StandardCharsets.UTF_8)
                 .replace("+", "%20");
@@ -127,7 +130,17 @@ public class KnowledgeBaseController {
             @PathVariable Long kbId,
             @PathVariable Long docId) {
         permissionService.requireWrite(kbId);
-        kbService.reindex(docId);
+        requireDocumentInKb(kbId, docId);
+        documentUpdateService.forceReindexAndSubmit(docId);
         return ApiResponse.ok("重建索引任务已提交，请通过 /status 接口查询进度");
+    }
+
+    /** 归属校验:docId 必须属于路径中的 kbId,防止跨库越权操作(消息/文档类端点通用) */
+    private void requireDocumentInKb(Long kbId, Long docId) {
+        KbDocument doc = documentRepository.findById(docId)
+                .orElseThrow(() -> com.kyle.rag.exception.BizException.notFound("文档不存在"));
+        if (!doc.getKbId().equals(kbId)) {
+            throw com.kyle.rag.exception.BizException.notFound("文档不存在");
+        }
     }
 }

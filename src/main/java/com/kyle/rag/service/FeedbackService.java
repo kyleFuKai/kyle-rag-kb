@@ -2,6 +2,7 @@ package com.kyle.rag.service;
 
 import com.kyle.rag.entity.*;
 import com.kyle.rag.repository.*;
+import com.kyle.rag.exception.BizException;
 import com.kyle.rag.security.UserContext;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -24,6 +25,7 @@ public class FeedbackService {
 
     private final AnswerFeedbackRepository feedbackRepository;
     private final ChatMessageRepository messageRepository;
+    private final ChatSessionRepository sessionRepository;
     private final EvalDatasetRepository datasetRepository;
 
     /**
@@ -32,8 +34,18 @@ public class FeedbackService {
      */
     @Transactional
     public void submitFeedback(Long messageId, int feedback, String comment) {
+        if (feedback != 1 && feedback != -1) {
+            throw BizException.badRequest("feedback 只能为 1（赞）或 -1（踩）");
+        }
+
         ChatMessage message = messageRepository.findById(messageId)
-                .orElseThrow(() -> new RuntimeException("消息不存在"));
+                .orElseThrow(() -> BizException.notFound("消息不存在"));
+        // 归属校验:消息所在会话必须属于当前用户(消息表无 userId,经会话表判定)
+        ChatSession session = sessionRepository.findById(message.getSessionId())
+                .orElseThrow(() -> BizException.notFound("消息不存在"));
+        if (!session.getUserId().equals(UserContext.getUserId())) {
+            throw BizException.forbidden("无权对该消息反馈");
+        }
 
         // 同一用户对同一消息只保留一条反馈，重复提交则覆盖
         Long userId = UserContext.getUserId();

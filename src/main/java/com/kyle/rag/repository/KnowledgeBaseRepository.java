@@ -22,6 +22,9 @@ public interface KnowledgeBaseRepository extends JpaRepository<KnowledgeBase, Lo
     /** 全员可见的公开知识库 */
     List<KnowledgeBase> findByIsPublicTrue();
 
+    /** 批量查知识库(权限过滤时一次取回公开状态,避免逐个查) */
+    List<KnowledgeBase> findByIdIn(List<Long> ids);
+
     /** 按名称 + 部门定位知识库,与 test-data.sql"按名称复用、不依赖主键"的口径一致 */
     Optional<KnowledgeBase> findByNameAndDepartmentId(String name, String departmentId);
 }

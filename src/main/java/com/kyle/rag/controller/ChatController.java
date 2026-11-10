@@ -2,11 +2,13 @@ package com.kyle.rag.controller;
 
 import com.kyle.rag.dto.ApiResponse;
 import com.kyle.rag.dto.ChatRequest;
+import jakarta.validation.Valid;
 import com.kyle.rag.dto.RagResponse;
 import com.kyle.rag.entity.ChatMessage;
 import com.kyle.rag.entity.ChatSession;
 import com.kyle.rag.repository.ChatMessageRepository;
 import com.kyle.rag.repository.ChatSessionRepository;
+import com.kyle.rag.exception.BizException;
 import com.kyle.rag.security.UserContext;
 import com.kyle.rag.service.*;
 import lombok.RequiredArgsConstructor;
@@ -96,10 +98,10 @@ public class ChatController {
 
     /** 同步问答:一次性返回 RagResponse(含 sources),权限与会话逻辑与流式一致 */
     @PostMapping
-    public RagResponse syncChat(@RequestBody ChatRequest request) {
+    public ApiResponse<RagResponse> syncChat(@Valid @RequestBody ChatRequest request) {
         request.getKbIds().forEach(permissionService::requireRead);
         String sid = sessionService.getOrCreateSession(request.getSessionId(), request.getKbIds());
-        return streamingRagService.syncQuery(request.getQuestion(), request.getKbIds(), sid);
+        return ApiResponse.ok(streamingRagService.syncQuery(request.getQuestion(), request.getKbIds(), sid));
     }
 
     /** 当前用户的会话列表,按最近活跃倒序 */
@@ -110,9 +112,14 @@ public class ChatController {
         return ApiResponse.ok(sessions);
     }
 
-    /** 指定会话的全部消息(按时间正序),历史回放用 */
+    /** 指定会话的全部消息(按时间正序),历史回放用;会话必须存在且属于当前用户 */
     @GetMapping("/sessions/{sessionId}/messages")
     public ApiResponse<List<ChatMessage>> getMessages(@PathVariable String sessionId) {
+        ChatSession session = sessionRepository.findById(sessionId)
+                .orElseThrow(() -> BizException.notFound("会话不存在：" + sessionId));
+        if (!session.getUserId().equals(UserContext.getUserId())) {
+            throw BizException.forbidden("无权访问该会话");
+        }
         return ApiResponse.ok(
                 messageRepository.findBySessionIdOrderByCreatedAtAsc(sessionId));
     }
