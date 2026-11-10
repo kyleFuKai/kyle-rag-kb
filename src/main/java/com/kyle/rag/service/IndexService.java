@@ -1,10 +1,12 @@
 package com.kyle.rag.service;
 
 import com.kyle.rag.entity.*;
+import com.kyle.rag.exception.BizException;
 import com.kyle.rag.repository.*;
 import com.kyle.rag.security.UserContext;
 import com.kyle.rag.service.loader.ParseResult;
 import com.kyle.rag.service.splitter.ChunkResult;
+import com.kyle.rag.exception.BizException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -108,7 +110,7 @@ public class IndexService {
         // 阶段 1：取文档元数据——失败说明 docId 已被删，不重试
         try {
             doc = documentRepository.findById(docId)
-                    .orElseThrow(() -> new RuntimeException("文档不存在：docId=" + docId));
+                    .orElseThrow(() -> BizException.notFound("文档不存在：docId=" + docId));
         } catch (Exception e) {
             markFailed(taskId, docId, e.getMessage());
             return;   // ★ 不进入 retryIfPossible——重试也找不到这条记录
@@ -144,7 +146,7 @@ public class IndexService {
         KbDocument doc;
         try {
             doc = documentRepository.findById(docId)
-                    .orElseThrow(() -> new RuntimeException("文档不存在：docId=" + docId));
+                    .orElseThrow(() -> BizException.notFound("文档不存在：docId=" + docId));
         } catch (Exception e) {
             markFailed(taskId, docId, e.getMessage());
             return;
@@ -177,13 +179,13 @@ public class IndexService {
 
         try {
             if (!parseResult.isSuccess()) {
-                throw new RuntimeException("文档解析失败：" + parseResult.getErrorMsg());
+                throw BizException.badRequest("文档解析失败：" + parseResult.getErrorMsg());
             }
 
             // 第一步：分块
             List<ChunkResult> chunks = chunkService.chunk(parseResult);
             if (chunks.isEmpty()) {
-                throw new RuntimeException("分块结果为空，文档可能无有效文本内容");
+                throw BizException.badRequest("分块结果为空，文档可能无有效文本内容");
             }
             log.info("[IndexService] docId={}，分块完成，共{}块", docId, chunks.size());
 
@@ -191,17 +193,11 @@ public class IndexService {
             List<String> texts = chunks.stream().map(ChunkResult::getContent).toList();
             List<float[]> embeddings = embeddingService.embedBatch(texts);
 
-            // ★ 第三步：递增版本号——下面写入用新版本号；旧 chunk 保持旧版本号不动
-            //   先 save 让"读 doc.version 的并发查询"能看到新版本，
-            //   但旧版本 chunk 还在，查询时 ORDER BY docVersion DESC 取最新即可。
-            //
-            //   这里 save 之前必须显式 setStatus(PROCESSING)——doc 参数对象是更早 findById 拿的，
-            //     内存里的 status 还是 PENDING；而 updateDocStatus 是用另一个对象 save 的。
-            //     如果不显式 set，这次 save 会把 doc.status=PENDING 写回 DB，覆盖掉 PROCESSING。
+            // ★ 第三步：计算新版本号(仅内存,不落库)——新分块用新版本号写入,
+            //   旧分块保持旧版本号继续对外服务;切换在第五步 save 时一次性完成,
+            //   杜绝"version 已更新但新分块未写入"的检索空窗(等值过滤下文档会消失)。
             int newVersion = (doc.getVersion() == null ? 1 : doc.getVersion() + 1);
-            doc.setVersion(newVersion);
-            doc.setStatus(KbDocument.DocumentStatus.PROCESSING);  // ★ 保持 PROCESSING，不被覆盖
-            documentRepository.save(doc);
+            doc.setStatus(KbDocument.DocumentStatus.PROCESSING);
 
             // 第四步：批量写入新版本数据
             List<DocChunk> docChunks = new ArrayList<>();
@@ -224,12 +220,15 @@ public class IndexService {
 
             batchInsertChunks(docChunks);
 
-            // ★ 第五步：新数据写入完成后，才删除旧版本——真正的"先写后删"
-            //   即使这一步挂了，旧版本 chunk 也只是没删干净，下次重建会再清，
-            //   不会出现"旧的没了、新的没全"的窗口。
-            chunkRepository.deleteByDocIdAndDocVersionLessThan(docId, newVersion);
+            // ★ 第五步：原子切换——先显式 setVersion 再 save,等值过滤的检索瞬间从旧版本切到新版本,
+            //   切换前全旧、切换后全新,无混合窗口;save 失败则新分块成为孤儿,
+            //   旧版本仍服务,下次重建按 <> newVersion 一并清理。
+            doc.setVersion(newVersion);
+            doc.setStatus(KbDocument.DocumentStatus.PROCESSING);   // 维持 PROCESSING,DONE 在第六步
+            documentRepository.save(doc);
+            chunkRepository.deleteByDocIdAndDocVersionNot(docId, newVersion);
 
-            // 第六步：更新文档状态
+            // 第六步：更新文档状态(含版本号——已在上面 save,这里只更新状态字段)
             doc.setStatus(KbDocument.DocumentStatus.DONE);
             doc.setChunkCount(chunks.size());
             doc.setTokenCount(totalTokens);

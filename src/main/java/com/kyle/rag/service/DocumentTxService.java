@@ -2,6 +2,7 @@ package com.kyle.rag.service;
 
 import com.kyle.rag.entity.KbDocument;
 import com.kyle.rag.repository.KbDocumentRepository;
+import com.kyle.rag.exception.BizException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -42,7 +43,7 @@ public class DocumentTxService {
     @Transactional
     public String updateDocumentRecord(Long docId, MultipartFile newFile) {
         KbDocument doc = documentRepository.findById(docId)
-                .orElseThrow(() -> new RuntimeException("文档不存在：" + docId));
+                .orElseThrow(() -> BizException.notFound("文档不存在：" + docId));
 
         String oldMinioPath = doc.getMinioPath();
         String newMinioPath = minioService.upload(doc.getKbId(), newFile);
@@ -50,7 +51,7 @@ public class DocumentTxService {
         doc.setFileName(newFile.getOriginalFilename());
         doc.setFileSize(newFile.getSize());
         doc.setMinioPath(newMinioPath);
-        doc.setVersion(doc.getVersion() + 1);
+        // 版本号不动——由 doIndex 在新分块全部写完后统一 +1(避免双跳和检索空窗)
         doc.setStatus(KbDocument.DocumentStatus.PENDING);
         doc.setErrorMsg(null);
         // 重建索引前清理上一轮的统计字段——避免前端轮询时看到旧值产生"已索引完"的误解
@@ -71,9 +72,9 @@ public class DocumentTxService {
     @Transactional
     public void forceReindex(Long docId) {
         KbDocument doc = documentRepository.findById(docId)
-                .orElseThrow(() -> new RuntimeException("文档不存在：" + docId));
+                .orElseThrow(() -> BizException.notFound("文档不存在：" + docId));
 
-        doc.setVersion(doc.getVersion() + 1);
+        // 版本号不动——由 doIndex 在新分块全部写完后统一 +1(避免双跳和检索空窗)
         doc.setStatus(KbDocument.DocumentStatus.PENDING);
         doc.setErrorMsg(null);
         // 同样清理统计字段

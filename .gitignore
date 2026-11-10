@@ -43,3 +43,6 @@ build/
 .env
 .env.*
 !.env.example
+
+# 运行期日志(本地测试/启动产生,不进版本库)
+*.log

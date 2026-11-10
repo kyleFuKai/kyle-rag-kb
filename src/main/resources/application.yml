@@ -1,6 +1,15 @@
 spring:
+  profiles:
+    active: dev
   application:
     name: jc-rag-kb                   # 应用名，用于日志/监控标识
+
+  # ========== Spring Cache（缓存注解 @Cacheable 的后端） ==========
+  cache:
+    type: redis                       # 缓存数据存 Redis（配合 RagApplication 上的 @EnableCaching）
+    redis:
+      time-to-live: ${rag.cache.query-ttl}   # 复用 RAG 查询缓存 TTL（10m），单一事实源
+      cache-null-values: false        # 不缓存 null,避免把模型调用的空结果缓存住
 
   # ========== 数据库 ==========
   datasource:

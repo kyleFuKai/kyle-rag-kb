@@ -10,6 +10,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -41,14 +42,16 @@ public class MinioStorageService {
      */
     public String upload(Long kbId, MultipartFile file) {
         String objectPath = String.format("kb/%d/%s-%s",
-                kbId, UUID.randomUUID().toString().substring(0, 8), file.getOriginalFilename());
-        try {
+                kbId, UUID.randomUUID().toString().substring(0, 8), safeFileName(file.getOriginalFilename()));
+        try (InputStream in = file.getInputStream()) {
             ensureBucketExists();
             minioClient.putObject(PutObjectArgs.builder()
                     .bucket(bucket)
                     .object(objectPath)
-                    .stream(file.getInputStream(), file.getSize(), -1)
-                    .contentType(file.getContentType())
+                    .stream(in, file.getSize(), -1)
+                    // 客户端可能不带 Content-Type,SDK 侧会拒绝空值
+                    .contentType(Optional.ofNullable(file.getContentType())
+                            .orElse("application/octet-stream"))
                     .build());
             log.info("[MinIO] 上传成功：path={}", objectPath);
             return objectPath;
@@ -63,11 +66,11 @@ public class MinioStorageService {
      * 失败抛 RuntimeException,IndexService.executeFromMinio 把它归为"可重试"阶段。
      */
     public byte[] download(String objectPath) {
-        try {
-            InputStream stream = minioClient.getObject(GetObjectArgs.builder()
-                    .bucket(bucket)
-                    .object(objectPath)
-                    .build());
+        try (InputStream stream = minioClient.getObject(GetObjectArgs.builder()
+                .bucket(bucket)
+                .object(objectPath)
+                .build())) {
+            // getObject 返回的是包着 OkHttp 响应体的流,必须关闭——否则连接不归还池,长期累积会耗尽连接
             return stream.readAllBytes();
         } catch (Exception e) {
             log.error("[MinIO] 下载失败：path={}，error={}", objectPath, e.getMessage(), e);
@@ -90,6 +93,15 @@ public class MinioStorageService {
             // 删除失败不抛出异常，只记录警告（文件可能已经不存在）
             log.warn("[MinIO] 删除失败（可能已不存在）：path={}，error={}", objectPath, e.getMessage());
         }
+    }
+
+    /** 文件名清洗:去掉路径部分与特殊字符,null 兜底为 upload */
+    private String safeFileName(String originalName) {
+        String name = originalName == null ? "upload" : originalName;
+        int slash = Math.max(name.lastIndexOf('/'), name.lastIndexOf('\\'));
+        if (slash >= 0) name = name.substring(slash + 1);
+        name = name.replaceAll("[^a-zA-Z0-9_.一-鿿-]", "_");
+        return name.isBlank() ? "upload" : name;
     }
 
     /** 桶不存在时自动创建,幂等;每次上传前调用,保证首次部署无需手工建桶 */

@@ -3,8 +3,6 @@ package com.kyle.rag.service;
 import com.kyle.rag.entity.DocChunk;
 import com.kyle.rag.exception.BizException;
 import com.kyle.rag.repository.DocChunkRepository;
-import com.kyle.rag.repository.KbPermissionRepository;
-import com.kyle.rag.repository.KnowledgeBaseRepository;
 import com.kyle.rag.security.UserContext;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -38,8 +36,7 @@ public class HybridRetrieverService {
     private final EmbeddingService embeddingService;
     private final DocChunkRepository chunkRepository;
     private final TsQueryBuilder tsQueryBuilder;
-    private final KnowledgeBaseRepository kbRepository;
-    private final KbPermissionRepository permissionRepository;
+    private final PermissionService permissionService;
 
     @Value("${rag.retrieval.vector-top-k:20}")
     private int vectorTopK;
@@ -98,7 +95,7 @@ public class HybridRetrieverService {
     public List<ScoredChunk> retrieveWithPermissionCheck(
             String question, List<Long> requestedKbIds, int topN) {
 
-        List<Long> allowedKbIds = filterAllowedKbIds(requestedKbIds);
+        List<Long> allowedKbIds = permissionService.filterReadableKbIds(requestedKbIds);
 
         if (allowedKbIds.isEmpty()) {
             throw BizException.forbidden("您对所请求的知识库没有访问权限");
@@ -115,26 +112,6 @@ public class HybridRetrieverService {
         return retrieve(question, allowedKbIds, topN);
     }
 
-    private List<Long> filterAllowedKbIds(List<Long> kbIds) {
-        if (UserContext.isAdmin()) return kbIds;
-
-        String userId = String.valueOf(UserContext.getUserId());
-        String deptId = UserContext.getDepartmentId();
-
-        return kbIds.stream()
-                .filter(kbId -> {
-                    boolean isPublic = kbRepository.findById(kbId)
-                            .map(kb -> kb.getIsPublic())
-                            .orElse(false);
-                    if (isPublic) return true;
-
-                    return permissionRepository.existsByKbIdAndSubjectTypeAndSubjectId(
-                            kbId, "USER", userId)
-                            || permissionRepository.existsByKbIdAndSubjectTypeAndSubjectId(
-                            kbId, "DEPARTMENT", deptId);
-                })
-                .toList();
-    }
 
     /**
      * RRF 融合两路结果。

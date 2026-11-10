@@ -4,6 +4,7 @@ import com.kyle.rag.dto.EvalReport;
 import com.kyle.rag.dto.RagResponse;
 import com.kyle.rag.entity.*;
 import com.kyle.rag.repository.*;
+import com.kyle.rag.exception.BizException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -43,7 +44,7 @@ public class EvalService {
     public EvalReport runEvaluation(Long kbId, String evalVersion) {
         List<EvalDataset> questions = datasetRepository.findByKbId(kbId);
         if (questions.isEmpty()) {
-            throw new RuntimeException("知识库 " + kbId + " 没有评估数据集，请先录入标准问题");
+            throw BizException.badRequest("知识库 " + kbId + " 没有评估数据集，请先录入标准问题");
         }
 
         log.info("[Eval] 开始评估：kbId={}，version={}，问题数={}", kbId, evalVersion, questions.size());

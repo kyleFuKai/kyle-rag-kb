@@ -12,6 +12,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
+import com.kyle.rag.common.AuthConstants;
 import java.util.List;
 import java.util.Map;
 /**
@@ -32,9 +33,6 @@ import java.util.Map;
 @Slf4j
 public class StreamingRagService {
 
-    private final EnhancedRetrieverService enhancedRetriever;
-    private final RerankerService rerankerService;
-    private final ConfidenceFilter confidenceFilter;
     private final ContextTrimmerService contextTrimmer;
     private final SourceBuilder sourceBuilder;
     private final ChatSessionService sessionService;
@@ -42,6 +40,7 @@ public class StreamingRagService {
     private final ObjectMapper objectMapper;
     private final TokenMetrics tokenMetrics;
     private final QueryCacheService queryCacheService;
+    private final FullRagPipeline fullRagPipeline;
 
     /**
      * 流式 RAG 查询:按 SSE 协议推送,生成完毕后整轮落库并推 done 事件。
@@ -55,10 +54,13 @@ public class StreamingRagService {
             List<Message> history = loadHistoryMessages(sessionId);
             boolean cacheable = history.isEmpty();
 
-            // 首轮才查缓存——命中则直接把完整答案一次性推给前端，跳过检索和生成
-            RagResponse cached = cacheable ? queryCacheService.getFromCache(question, kbIds) : null;
-            if (cached != null) {
-                emitter.send(SseEmitter.event().name("token").data(cached.getAnswer()));
+            // 准备阶段(权限 → 缓存 → 检索 → 精排 → 过滤 → 裁剪 → context),与同步管道同一实现
+            // 注意:多轮追问有历史,答案取决于上下文,不能复用首轮缓存
+            FullRagPipeline.Prepared prepared = fullRagPipeline.prepare(question, kbIds);
+            if (cacheable && prepared.cacheHit()) {
+                RagResponse cached = prepared.cached();
+                emitter.send(SseEmitter.event().name("token")
+                        .data(objectMapper.writeValueAsString(Map.of("t", cached.getAnswer()))));
                 String doneData = objectMapper.writeValueAsString(
                         new DonePayload(cached.getSources(), 0));
                 emitter.send(SseEmitter.event().name("done").data(doneData));
@@ -73,22 +75,17 @@ public class StreamingRagService {
                     .name("status")
                     .data("{\"type\":\"RETRIEVING\",\"message\":\"正在检索知识库...\"}"));
 
-            var candidates = enhancedRetriever.retrieveWithHyde(question, kbIds, 20);
-            var reranked = rerankerService.rerank(question, candidates, 5);
-            var filtered = confidenceFilter.filter(reranked);
-
-            if (filtered.isEmpty()) {
+            if (prepared.empty()) {
                 sendNotFound(emitter);
                 return;
             }
-
-            var trimmed = contextTrimmer.trim(filtered);
 
             emitter.send(SseEmitter.event()
                     .name("status")
                     .data("{\"type\":\"GENERATING\",\"message\":\"已找到相关内容，正在生成回答...\"}"));
 
-            String context = buildContext(trimmed);
+            var trimmed = prepared.trimmed();
+            String context = prepared.context();
             String systemPrompt = RagPromptTemplate.buildSystemPrompt(context, trimmed.size());
 
             StringBuilder fullAnswer = new StringBuilder();
@@ -102,7 +99,9 @@ public class StreamingRagService {
                     .doOnNext(token -> {
                         try {
                             fullAnswer.append(token);
-                            emitter.send(SseEmitter.event().name("token").data(token));
+                            // token 包 JSON:答案自带换行会被 SSE 当事件分隔符,JSON 转义后前端解析还原
+                            emitter.send(SseEmitter.event().name("token")
+                                    .data(objectMapper.writeValueAsString(Map.of("t", token))));
                         } catch (IOException e) {
                             log.warn("[StreamRAG] SSE 推送 Token 失败，客户端可能已断开");
                             throw new RuntimeException("SSE 连接断开");
@@ -123,7 +122,7 @@ public class StreamingRagService {
             if (cacheable) {
                 RagResponse response = RagResponse.builder()
                         .answer(answer).sources(sources).latencyMs(latencyMs).build();
-                queryCacheService.putToCache(question, kbIds, response);
+                queryCacheService.putToCache(question, prepared.readableKbIds(), response);
             }
 
             String doneData = objectMapper.writeValueAsString(new DonePayload(sources, latencyMs));
@@ -150,25 +149,20 @@ public class StreamingRagService {
         List<Message> history = loadHistoryMessages(sessionId);
         boolean cacheable = history.isEmpty();
 
-        // 先查缓存（仅首轮）
-        RagResponse cached = cacheable ? queryCacheService.getFromCache(question, kbIds) : null;
-        if (cached != null) {
+        // 准备阶段(权限 → 缓存 → 检索 → 精排 → 过滤 → 裁剪 → context),与流式/无会话管道同一实现
+        FullRagPipeline.Prepared prepared = fullRagPipeline.prepare(question, kbIds);
+        if (cacheable && prepared.cacheHit()) {
+            RagResponse cached = prepared.cached();
             sessionService.saveMessage(sessionId, question, cached.getAnswer(),
                     sourceBuilder.sourcesToJson(cached.getSources()), 0);
             return cached;
         }
+        if (prepared.empty()) return RagResponse.notFound();
 
-        // 缓存未命中，走完整 RAG 管道
         long start = System.currentTimeMillis();
 
-        var candidates = enhancedRetriever.retrieveWithHyde(question, kbIds, 20);
-        var reranked = rerankerService.rerank(question, candidates, 5);
-        var filtered = confidenceFilter.filter(reranked);
-
-        if (filtered.isEmpty()) return RagResponse.notFound();
-
-        var trimmed = contextTrimmer.trim(filtered);
-        String context = buildContext(trimmed);
+        var trimmed = prepared.trimmed();
+        String context = prepared.context();
         String systemPrompt = RagPromptTemplate.buildSystemPrompt(context, trimmed.size());
 
         String answer = chatClient.prompt()
@@ -194,7 +188,7 @@ public class StreamingRagService {
 
         // 只有首轮（无历史）才写缓存
         if (cacheable) {
-            queryCacheService.putToCache(question, kbIds, response);
+            queryCacheService.putToCache(question, prepared.readableKbIds(), response);
         }
         return response;
     }
@@ -202,7 +196,7 @@ public class StreamingRagService {
     /** 会话历史转 Spring AI 消息列表(USER/ASSISTANT 按角色还原),喂给模型做多轮上下文 */
     private List<Message> loadHistoryMessages(String sessionId) {
         return sessionService.getHistory(sessionId).stream()
-                .map(m -> "USER".equals(m.getRole())
+                .map(m -> AuthConstants.CHAT_ROLE_USER.equals(m.getRole())
                         ? (Message) new UserMessage(m.getContent())
                         : (Message) new AssistantMessage(m.getContent()))
                 .toList();
@@ -225,7 +219,8 @@ public class StreamingRagService {
     /** 空结果短路:推一段话术 + 空 done 事件,不调模型 */
     private void sendNotFound(SseEmitter emitter) throws IOException {
         String msg = "在知识库中未找到与该问题相关的内容。请尝试用不同关键词提问，或联系相关部门。";
-        emitter.send(SseEmitter.event().name("token").data(msg));
+        emitter.send(SseEmitter.event().name("token")
+                .data(objectMapper.writeValueAsString(Map.of("t", msg))));
         emitter.send(SseEmitter.event().name("done").data("{\"sources\":[]}"));
         emitter.complete();
     }

@@ -17,12 +17,12 @@ import java.util.List;
  */
 public interface DocChunkRepository extends JpaRepository<DocChunk, Long> {
 
-    /** 删除文档的旧版本分块（重建索引时使用） */
+    /** 删除文档中版本号不等于指定值的分块(旧版本+重建失败的孤儿,重建索引切换后调用) */
     @Modifying
     @Transactional
-    @Query("DELETE FROM DocChunk c WHERE c.docId = :docId AND c.docVersion < :version")
-    void deleteByDocIdAndDocVersionLessThan(@Param("docId") Long docId,
-                                            @Param("version") Integer version);
+    @Query("DELETE FROM DocChunk c WHERE c.docId = :docId AND c.docVersion <> :version")
+    void deleteByDocIdAndDocVersionNot(@Param("docId") Long docId,
+                                       @Param("version") Integer version);
 
     /**
      * 向量相似度检索（余弦相似度）。
