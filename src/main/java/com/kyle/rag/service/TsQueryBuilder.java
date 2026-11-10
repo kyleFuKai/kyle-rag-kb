@@ -47,9 +47,17 @@ public class TsQueryBuilder {
                 .collect(Collectors.toList());
 
         if (keywords.isEmpty()) {
-            // 降级：取整个查询的前20字符
-            keywords = List.of(query.substring(0, Math.min(20, query.length())));
+            return null;
         }
+
+        // 每个 token 只保留安全字符(字母/数字/下划线/CJK),
+        // 剥掉 tsquery 操作符(& | ! ( ) : *)——to_tsquery 把输入当表达式解析,
+        // 不清洗的话注入字符会引发语法错误(500)或被解释为操作符改变查询语义。
+        keywords = keywords.stream()
+                .map(t -> t.replaceAll("[^a-zA-Z_0-9一-鿿]", ""))
+                .filter(t -> !t.isEmpty())
+                .collect(Collectors.toList());
+        if (keywords.isEmpty()) return null;
 
         // 用 & 连接（AND 查询），至少含所有关键词
         String tsQuery = String.join(" & ", keywords);
